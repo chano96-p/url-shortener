@@ -5,6 +5,7 @@ import { isValidUrl } from "./validate.js";
 
 const port = Number(process.env.PORT) || 3000;
 const baseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
+const CODE_PATTERN = /^[a-zA-Z0-9]{4,10}$/;
 
 const app = express();
 app.use(express.json());
@@ -39,6 +40,30 @@ app.post("/api/urls", async (req, res) => {
     originalUrl: url,
     createdAt: row.created_at,
   });
+});
+
+app.get("/:code", async (req, res) => {
+  const { code } = req.params;
+
+  if (!CODE_PATTERN.test(code)) {
+    return res.status(404).json({
+      error: { code: "NOT_FOUND", message: "Short URL not found" },
+    });
+  }
+
+  const result = await pool.query(
+    "UPDATE urls SET click_count = click_count + 1 WHERE short_code = $1 RETURNING original_url",
+    [code],
+  );
+
+  if (result.rows.length === 0) {
+    return res.status(404).json({
+      error: { code: "NOT_FOUND", message: "Short URL not found" },
+    });
+  }
+
+  res.set("Cache-Control", "no-store");
+  res.redirect(302, result.rows[0].original_url);
 });
 
 app.listen(port, () => console.log(`listening on :${port}`));
