@@ -2,22 +2,27 @@
   "name": "url-shortener",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "format": "biome format --write .",
+    "lint": "biome check --write ."
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.33.2",
   "dependencies": {
-    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.8",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
+    "@types/pg": "^8.21.0",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }
