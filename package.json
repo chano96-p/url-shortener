@@ -8,7 +8,8 @@
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "format": "biome format --write .",
-    "lint": "biome check --write ."
+    "lint": "biome check --write .",
+    "db:schema": "docker compose exec -T db psql -U postgres -d shortener < schema.sql"
   },
   "keywords": [],
   "author": "",
