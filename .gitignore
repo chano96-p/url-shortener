@@ -1,5 +1,16 @@
 node_modules/
 dist
+
+# env files
 .env
 .env.*
 !.env.example
+
+# prisma
+/src/generated/
+
+# AI tooling
+.agents/
+.claude/
+.windsurf/
+skills-lock.json

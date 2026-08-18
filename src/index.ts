@@ -1,33 +1,39 @@
 import express from "express";
 import { pool } from "./db.js";
+import { prisma } from "./prisma.js";
 import { generateCode } from "./shortCode.js";
 import { isValidUrl } from "./validate.js";
 
+// ─── 설정 ──────────────────────────────────────────
 const port = Number(process.env.PORT) || 3000;
 const baseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
 const CODE_PATTERN = /^[a-zA-Z0-9]{4,10}$/;
 
-type Cursor = { createdAt: string; id: string };
+// ─── 헬퍼 ──────────────────────────────────────────
+type UrlRow = {
+  id: bigint;
+  short_code: string;
+  original_url: string;
+  click_count: bigint;
+  created_at: Date;
+};
 
-function parseCursor(raw: unknown): Cursor | null | "invalid" {
+function parseCursor(raw: unknown): bigint | null | "invalid" {
   if (raw === undefined) return null;
   if (typeof raw !== "string") return "invalid";
 
-  let decoded: string;
-  try {
-    decoded = Buffer.from(raw, "base64url").toString();
-  } catch {
-    return "invalid";
-  }
+  const decoded = Buffer.from(raw, "base64url").toString();
+  if (!/^\d+$/.test(decoded)) return "invalid";
+  if (decoded.length > 19) return "invalid";
 
-  const parts = decoded.split("|");
-  if (parts.length !== 2) return "invalid";
+  const value = BigInt(decoded);
+  if (value > 9223372036854775807n) return "invalid";
 
-  const [createdAt, id] = parts;
-  if (Number.isNaN(Date.parse(createdAt))) return "invalid";
-  if (!/^\d+$/.test(id)) return "invalid";
+  return value;
+}
 
-  return { createdAt, id };
+function encodeCursor(id: bigint): string {
+  return Buffer.from(id.toString()).toString("base64url");
 }
 
 function parseLimit(raw: unknown): number {
@@ -36,16 +42,17 @@ function parseLimit(raw: unknown): number {
   return Math.min(n, 100);
 }
 
-const LIST_COLUMNS = "id, short_code, original_url, click_count, created_at";
-
+// ─── 앱 ────────────────────────────────────────────
 const app = express();
 app.use(express.json());
 
+// ─── 헬스체크 ──────────────────────────────────────
 app.get("/health", async (_req, res) => {
   const result = await pool.query("SELECT NOW()");
   res.json({ ok: true, dbTime: result.rows[0].now });
 });
 
+// ─── 단축 URL 생성 ─────────────────────────────────
 app.post("/api/urls", async (req, res) => {
   const { url } = req.body ?? {};
 
@@ -55,24 +62,21 @@ app.post("/api/urls", async (req, res) => {
     });
   }
 
-  const code = generateCode();
-
-  const result = await pool.query(
-    "INSERT INTO urls (short_code, original_url) VALUES ($1, $2) RETURNING id, short_code, created_at",
-    [code, url],
-  );
-
-  const row = result.rows[0];
+  const created = await prisma.url.create({
+    data: { shortCode: generateCode(), originalUrl: url },
+    select: { id: true, shortCode: true, createdAt: true },
+  });
 
   res.status(201).json({
-    id: String(row.id),
-    shortCode: row.short_code,
-    shortUrl: `${baseUrl}/${row.short_code}`,
+    id: created.id.toString(),
+    shortCode: created.shortCode,
+    shortUrl: `${baseUrl}/${created.shortCode}`,
     originalUrl: url,
-    createdAt: row.created_at,
+    createdAt: created.createdAt,
   });
 });
 
+// ─── 목록 조회 (커서 페이지네이션) ──────────────────
 app.get("/api/urls", async (req, res) => {
   const limit = parseLimit(req.query.limit);
   const cursor = parseCursor(req.query.cursor);
@@ -84,41 +88,41 @@ app.get("/api/urls", async (req, res) => {
   }
 
   // limit + 1 조회 → 초과 여부로 다음 페이지 판정
-  const result = cursor
-    ? await pool.query(
-        `SELECT ${LIST_COLUMNS} FROM urls
-         WHERE (created_at, id) < ($1, $2)
-         ORDER BY created_at DESC, id DESC
-         LIMIT $3`,
-        [cursor.createdAt, cursor.id, limit + 1],
-      )
-    : await pool.query(
-        `SELECT ${LIST_COLUMNS} FROM urls
-         ORDER BY created_at DESC, id DESC
-         LIMIT $1`,
-        [limit + 1],
-      );
+  const take = limit + 1;
+  const rows =
+    cursor === null
+      ? await prisma.$queryRaw<UrlRow[]>`
+          SELECT id, short_code, original_url, click_count, created_at
+          FROM urls
+          ORDER BY id DESC
+          LIMIT ${take}
+        `
+      : await prisma.$queryRaw<UrlRow[]>`
+          SELECT id, short_code, original_url, click_count, created_at
+          FROM urls
+          WHERE id < ${cursor}
+          ORDER BY id DESC
+          LIMIT ${take}
+        `;
 
-  const hasNext = result.rows.length > limit;
-  const rows = hasNext ? result.rows.slice(0, limit) : result.rows;
+  const hasNext = rows.length > limit;
+  const page = hasNext ? rows.slice(0, limit) : rows;
 
-  const items = rows.map((r) => ({
-    id: String(r.id),
+  const items = page.map((r) => ({
+    id: r.id.toString(),
     shortCode: r.short_code,
     originalUrl: r.original_url,
-    clickCount: String(r.click_count),
+    clickCount: r.click_count.toString(),
     createdAt: r.created_at,
   }));
 
-  const last = rows.at(-1);
-  const nextCursor =
-    hasNext && last
-      ? Buffer.from(`${last.created_at.toISOString()}|${last.id}`).toString("base64url")
-      : null;
+  const last = page.at(-1);
+  const nextCursor = hasNext && last ? encodeCursor(last.id) : null;
 
   res.json({ items, nextCursor });
 });
 
+// ─── 리다이렉트 (반드시 맨 아래) ────────────────────
 app.get("/:code", async (req, res) => {
   const { code } = req.params;
 
@@ -128,19 +132,21 @@ app.get("/:code", async (req, res) => {
     });
   }
 
-  const result = await pool.query(
-    "UPDATE urls SET click_count = click_count + 1 WHERE short_code = $1 RETURNING original_url",
-    [code],
-  );
+  const rows = await prisma.url.updateManyAndReturn({
+    where: { shortCode: code },
+    data: { clickCount: { increment: 1 } },
+    select: { originalUrl: true },
+  });
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     return res.status(404).json({
       error: { code: "NOT_FOUND", message: "Short URL not found" },
     });
   }
 
   res.set("Cache-Control", "no-store");
-  res.redirect(302, result.rows[0].original_url);
+  res.redirect(302, rows[0].originalUrl);
 });
 
+// ─── 시작 ──────────────────────────────────────────
 app.listen(port, () => console.log(`listening on :${port}`));

@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id    BigInt @id @default(autoincrement())
+  email String @unique
+  urls  Url[]
+
+  @@map("users")
+}
+
+model Url {
+  id          BigInt   @id @default(autoincrement())
+  shortCode   String   @map("short_code") @db.VarChar(10)
+  originalUrl String   @map("original_url")
+  clickCount  BigInt   @default(0) @map("click_count")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  userId      BigInt?  @map("user_id")
+  user        User?    @relation(fields: [userId], references: [id])
+
+  @@index([shortCode], map: "idx_urls_short_code")
+  @@index([userId, createdAt(sort: Desc)], map: "idx_urls_user_created")
+
+  @@map("urls")
+}
