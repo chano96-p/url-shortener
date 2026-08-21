@@ -7,7 +7,6 @@ const BATCH_SIZE = 1000;
 
 async function main() {
   const started = Date.now();
-  let inserted = 0;
 
   for (let offset = 0; offset < TOTAL; offset += BATCH_SIZE) {
     const params: string[] = [];
@@ -18,22 +17,19 @@ async function main() {
       placeholders.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
     }
 
-    // UNIQUE 충돌 시 배치 전체가 롤백되므로 충돌 행만 건너뜀
-    const result = await pool.query(
+    await pool.query(
       `INSERT INTO urls (short_code, original_url) VALUES ${placeholders.join(",")}
        ON CONFLICT (short_code) DO NOTHING`,
       params,
     );
-    inserted += result.rowCount ?? 0;
 
-    const attempted = offset + BATCH_SIZE;
+    const done = offset + BATCH_SIZE;
     const elapsed = (Date.now() - started) / 1000;
-    console.log(`시도 ${attempted} | 삽입 ${inserted} | ${(inserted / elapsed).toFixed(0)} rows/s`);
+    console.log(`${done} rows | ${(done / elapsed).toFixed(0)} rows/s`);
   }
 
-  console.log(
-    `완료: ${((Date.now() - started) / 1000).toFixed(1)}초, 삽입 ${inserted}건 (충돌 ${TOTAL - inserted}건 스킵)`,
-  );
+  console.log(`완료: ${((Date.now() - started) / 1000).toFixed(1)}초`);
+  await pool.end();
 }
 
 main()

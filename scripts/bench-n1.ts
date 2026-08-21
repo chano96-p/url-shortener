@@ -1,4 +1,4 @@
-import { prisma } from "./prisma.js";
+import { prisma } from "../src/prisma.js";
 
 const QUERY_ARGS = {
   where: { userId: { not: null } },
